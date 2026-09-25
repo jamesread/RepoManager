@@ -1,0 +1,10 @@
+plist
+plist-wui
+frontend/node_modules/
+frontend/dist/
+tmp/
+service/tmp/
+.vite/
+*.exe
+*.test
+.DS_Store
