@@ -17,6 +17,16 @@ func TestIsIndexedProject(t *testing.T) {
 	if !IsIndexed(dir) {
 		t.Fatal("expected git project")
 	}
+	worktree := filepath.Join(t.TempDir(), "linked")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: /tmp/main/.git/worktrees/linked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if IsIndexed(worktree) {
+		t.Fatal("expected false for linked worktree (.git file)")
+	}
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}

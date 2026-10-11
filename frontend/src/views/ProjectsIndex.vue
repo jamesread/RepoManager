@@ -5,6 +5,8 @@ import Section from 'picocrank/vue/components/Section.vue'
 import Table from 'picocrank/vue/components/Table.vue'
 import ProjectIcon from '../components/ProjectIcon.vue'
 import ProjectIconView from '../components/ProjectIconView.vue'
+import ProjectTag from '../components/ProjectTag.vue'
+import ProjectTagList from '../components/ProjectTagList.vue'
 import {
   buildDefaultColumnVisibility,
   fetchProjects,
@@ -15,18 +17,20 @@ import {
   refreshProject,
   refreshProjects,
   resolveFields,
+  setProjectAnnotation,
   setProjectTags,
   setRoot,
-  tagChipStyle,
   isHelperTag,
 } from '../composables/api'
 import {
   PROJECTS_TABLE_ID,
   collectDiscreteFilterOptions,
-  collectExactFilterOptions,
-  createLocalLayoutPresets,
+  collectAnnotationFilterOptions,
+  buildProjectsSpreadsheetTSV,
   createProjectsFetchRows,
+  visibleFilteredProjectIds,
 } from '../composables/projectTable'
+import { createServerProjectViews } from '../composables/projectViews'
 
 const route = useRoute()
 const viewMode = computed(() => (route.query.view === 'icons' ? 'icons' : 'table'))
@@ -41,7 +45,14 @@ const fields = ref(resolveFields([]))
 const error = ref('')
 const columnVisibility = ref(buildDefaultColumnVisibility([]))
 const tableFilters = ref({})
-const layoutPresets = createLocalLayoutPresets()
+const iconViewRef = ref(null)
+const iconsLayoutSummary = ref('')
+const layoutPresets = createServerProjectViews({
+  getIconsState: () => iconViewRef.value?.getIconsState?.(),
+  onApplyIcons: (icons) => iconViewRef.value?.applyIconsState?.(icons),
+  getHeaders: () => headers.value,
+  getRows: () => rows.value,
+})
 const refreshing = ref({})
 const refreshingSelection = ref(false)
 const rootDialogRef = ref(null)
@@ -52,10 +63,17 @@ const selectedKeys = ref([])
 const knownTags = ref([])
 const tagColors = ref({})
 const tagDialogRef = ref(null)
-const tagMode = ref('add')
-const tagDraft = ref('')
 const tagDialogError = ref('')
 const tagSaving = ref(false)
+const annotationDialogRef = ref(null)
+const annotationDrafts = ref({})
+const annotationMixed = ref({})
+const annotationSnapshot = ref({})
+const newAnnotationKey = ref('')
+const newAnnotationValue = ref('')
+const annotationDialogError = ref('')
+const annotationSaving = ref(false)
+const copyTableStatus = ref('')
 let timer = null
 let visibilityReady = false
 let rowsFingerprint = ''
@@ -116,7 +134,7 @@ const headers = computed(() => {
       col.multiValue = true
       col.filterOptions = collectDiscreteFilterOptions(projects.value, f.id, projectFieldValue)
     } else if (annotation) {
-      col.filterOptions = collectExactFilterOptions(projects.value, f.id, projectFieldValue)
+      col.filterOptions = collectAnnotationFilterOptions(projects.value, f.id, projectFieldValue)
     }
     cols.push(col)
   }
@@ -175,6 +193,10 @@ const rows = computed(() => {
         row[header.key] = Number(raw)
         continue
       }
+      if (kindByID[header.key] === 'bool') {
+        row[header.key] = typeof raw === 'boolean' ? raw : ''
+        continue
+      }
       row[header.key] = raw == null ? '' : raw
     }
     row.icon = projectFieldValue(p, 'icon') || ''
@@ -208,19 +230,27 @@ const tagSuggestions = computed(() => {
   return [...seen].filter((tag) => !isHelperTag(tag)).sort((a, b) => a.localeCompare(b))
 })
 
-const removableTags = computed(() => {
-  const selected = new Set(selectedKeys.value)
+const annotationKeys = computed(() => {
+  const keys = []
   const seen = new Set()
-  for (const project of projects.value) {
-    if (!selected.has(project.path)) continue
-    for (const tag of project.tags || []) {
-      if (tag && !isHelperTag(tag)) seen.add(tag)
+  for (const field of fields.value || []) {
+    if (!field.id?.startsWith('annotation.')) continue
+    const key = field.id.slice('annotation.'.length)
+    if (key && !seen.has(key)) {
+      seen.add(key)
+      keys.push(key)
     }
   }
-  return [...seen].sort((a, b) => a.localeCompare(b))
+  for (const project of projects.value) {
+    for (const key of Object.keys(project.annotations || {})) {
+      if (key && !seen.has(key)) {
+        seen.add(key)
+        keys.push(key)
+      }
+    }
+  }
+  return keys.sort((a, b) => a.localeCompare(b))
 })
-
-const tagDialogTitle = computed(() => (tagMode.value === 'remove' ? 'Remove tag' : 'Add tag'))
 
 function applyProjectsPayload(data) {
   root.value = data.root || ''
@@ -271,6 +301,29 @@ async function onRefreshProject(path) {
     const next = { ...refreshing.value }
     delete next[path]
     refreshing.value = next
+  }
+}
+
+async function copySelectedTableToClipboard() {
+  copyTableStatus.value = ''
+  if (!selectedKeys.value.length) {
+    return
+  }
+  const text = buildProjectsSpreadsheetTSV(
+    rows.value,
+    headers.value,
+    columnVisibility.value,
+    selectedKeys.value,
+  )
+  if (!text.trim()) {
+    copyTableStatus.value = 'Nothing to copy'
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    copyTableStatus.value = 'Copied to clipboard'
+  } catch (e) {
+    copyTableStatus.value = e.message || String(e)
   }
 }
 
@@ -373,16 +426,79 @@ function tagPressed(tag) {
   return state === 'on'
 }
 
-async function openTagDialog(mode) {
-  if (!selectedKeys.value.length) return
-  tagMode.value = mode
-  tagDialogError.value = ''
-  tagDraft.value = mode === 'remove' ? (removableTags.value[0] || '') : ''
-  tagDialogRef.value?.showModal()
-  if (mode === 'remove') {
-    await nextTick()
-    tagDialogRef.value?.querySelector('#tag-name')?.focus()
+function pruneSelectedKeysToVisibleView() {
+  const visible = viewMode.value === 'icons'
+    ? new Set(iconViewRef.value?.visibleProjectIds?.() || [])
+    : visibleFilteredProjectIds(rows.value, headers.value, tableFilters.value)
+  if (visible.size === 0) {
+    selectedKeys.value = []
+    return 0
   }
+  const before = selectedKeys.value.length
+  selectedKeys.value = selectedKeys.value.filter((key) => visible.has(key))
+  return before - selectedKeys.value.length
+}
+
+function onIconVisiblePathsChanged(paths) {
+  if (viewMode.value !== 'icons') return
+  const visible = new Set(paths)
+  selectedKeys.value = selectedKeys.value.filter((key) => visible.has(key))
+}
+
+function annotationBulkValue(key) {
+  const selected = new Set(selectedKeys.value)
+  let value = null
+  let mixed = false
+  for (const project of projects.value) {
+    if (!selected.has(project.path)) continue
+    const current = project.annotations?.[key] || ''
+    if (value === null) {
+      value = current
+      continue
+    }
+    if (value !== current) {
+      mixed = true
+      break
+    }
+  }
+  return { value: value ?? '', mixed }
+}
+
+function initAnnotationDrafts() {
+  const drafts = {}
+  const mixed = {}
+  const snapshot = {}
+  for (const key of annotationKeys.value) {
+    const state = annotationBulkValue(key)
+    drafts[key] = state.mixed ? '' : state.value
+    mixed[key] = state.mixed
+    snapshot[key] = state.mixed ? '__mixed__' : state.value
+  }
+  annotationDrafts.value = drafts
+  annotationMixed.value = mixed
+  annotationSnapshot.value = snapshot
+}
+
+async function openTagDialog() {
+  if (!selectedKeys.value.length) return
+  tagDialogError.value = ''
+  tagDialogRef.value?.showModal()
+}
+
+async function openAnnotationDialog() {
+  if (!selectedKeys.value.length) return
+  const dropped = pruneSelectedKeysToVisibleView()
+  if (!selectedKeys.value.length) {
+    annotationDialogError.value = dropped > 0
+      ? 'No selected projects match the current filters.'
+      : ''
+    return
+  }
+  annotationDialogError.value = ''
+  newAnnotationKey.value = ''
+  newAnnotationValue.value = ''
+  initAnnotationDrafts()
+  annotationDialogRef.value?.showModal()
 }
 
 async function toggleBulkTag(tag) {
@@ -413,42 +529,59 @@ function onTagDialogBackdropClick(event) {
   }
 }
 
-async function onTagDialogSubmit(event) {
-  const submitter = event.submitter
-  const action = submitter?.value || 'cancel'
-  if (action !== 'save') return
-  event.preventDefault()
-  const tag = tagDraft.value.trim()
-  if (!tag) {
-    tagDialogError.value = 'Enter a tag'
-    return
+function onAnnotationDialogBackdropClick(event) {
+  if (event.target === annotationDialogRef.value) {
+    annotationDialogRef.value.close('cancel')
   }
-  if (isHelperTag(tag)) {
-    tagDialogError.value = 'Tag is set by a helper'
-    return
-  }
-  if (!selectedKeys.value.length) {
-    tagDialogError.value = 'Select at least one project'
-    return
-  }
-  tagSaving.value = true
-  tagDialogError.value = ''
+}
+
+function onAnnotationDialogClosed() {
+  selectedKeys.value = []
+}
+
+async function saveBulkAnnotation(key) {
+  if (!key || annotationSaving.value || !selectedKeys.value.length) return
+  const value = String(annotationDrafts.value[key] ?? '').trim()
+  const snapshot = annotationSnapshot.value[key]
+  if (snapshot === '__mixed__' && value === '') return
+  if (snapshot !== '__mixed__' && value === snapshot) return
+  annotationSaving.value = true
+  annotationDialogError.value = ''
   try {
-    const data = await setProjectTags({
-      paths: [...selectedKeys.value],
-      tag,
-      op: tagMode.value === 'remove' ? 'remove' : 'add',
-    })
-    applyProjectsPayload(data)
-    error.value = ''
-    rowsFingerprint = ''
-    refreshTableIfRowsChanged()
-    tagDialogRef.value?.close('save')
+    const paths = [...selectedKeys.value]
+    await Promise.all(paths.map((path) => setProjectAnnotation({ path, key, value })))
+    await load()
+    annotationMixed.value = { ...annotationMixed.value, [key]: false }
+    annotationSnapshot.value = { ...annotationSnapshot.value, [key]: value }
   } catch (e) {
-    tagDialogError.value = e.message || String(e)
+    annotationDialogError.value = e.message || String(e)
   } finally {
-    tagSaving.value = false
+    annotationSaving.value = false
   }
+}
+
+async function addBulkAnnotation() {
+  const key = newAnnotationKey.value.trim()
+  if (!key || annotationSaving.value || !selectedKeys.value.length) return
+  const value = newAnnotationValue.value.trim()
+  annotationSaving.value = true
+  annotationDialogError.value = ''
+  try {
+    const paths = [...selectedKeys.value]
+    await Promise.all(paths.map((path) => setProjectAnnotation({ path, key, value })))
+    newAnnotationKey.value = ''
+    newAnnotationValue.value = ''
+    await load()
+    initAnnotationDrafts()
+  } catch (e) {
+    annotationDialogError.value = e.message || String(e)
+  } finally {
+    annotationSaving.value = false
+  }
+}
+
+function openIconLayoutDialog() {
+  iconViewRef.value?.openControlsDialog?.()
 }
 
 function toggleMultiSelect() {
@@ -460,6 +593,15 @@ watch(viewMode, (mode) => {
   if (mode === 'icons' && !multiSelect.value) {
     selectedKeys.value = []
   }
+  if (mode !== 'table') {
+    copyTableStatus.value = ''
+  }
+})
+
+watch(selectedKeys, (keys) => {
+  if (!keys.length) {
+    copyTableStatus.value = ''
+  }
 })
 
 function onPageKeydown(event) {
@@ -470,10 +612,10 @@ function onPageKeydown(event) {
     const tagName = el.tagName
     if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT' || el.isContentEditable) return
   }
-  if (tagDialogRef.value?.open || rootDialogRef.value?.open) return
+  if (tagDialogRef.value?.open || annotationDialogRef.value?.open || rootDialogRef.value?.open) return
   if (!selectedKeys.value.length) return
   event.preventDefault()
-  openTagDialog('add')
+  openTagDialog()
 }
 
 function onProjectsUpdated(event) {
@@ -481,6 +623,12 @@ function onProjectsUpdated(event) {
   applyProjectsPayload(event.detail)
   error.value = ''
 }
+
+watch(tableFilters, () => {
+  if (viewMode.value === 'table') {
+    pruneSelectedKeysToVisibleView()
+  }
+}, { deep: true })
 
 onMounted(() => {
   syncColumnVisibility(headers.value)
@@ -498,8 +646,23 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <Section title="Projects" :subtitle="subtitle" :padding="false">
+  <Section
+    title="Projects"
+    :subtitle="subtitle"
+    :padding="false"
+    :classes="viewMode === 'icons' ? 'projects-icons-view' : ''"
+  >
     <template #toolbar>
+      <button
+        v-if="viewMode === 'icons'"
+        type="button"
+        class="neutral"
+        @click="openIconLayoutDialog"
+      >Layout &amp; filters…</button>
+      <span
+        v-if="viewMode === 'icons' && iconsLayoutSummary"
+        class="subtle projects-icons-layout-summary"
+      >{{ iconsLayoutSummary }}</span>
       <button
         v-if="viewMode === 'icons'"
         type="button"
@@ -508,6 +671,17 @@ onUnmounted(() => {
         @click="toggleMultiSelect"
       >Multi select</button>
       <span v-if="selectedKeys.length" class="subtle">{{ selectedKeys.length }} selected</span>
+      <button
+        v-if="viewMode === 'table' && selectedKeys.length"
+        type="button"
+        class="neutral"
+        title="Copy visible columns and selected rows as tab-separated values for a spreadsheet"
+        @click="copySelectedTableToClipboard"
+      >Copy table</button>
+      <span
+        v-if="viewMode === 'table' && copyTableStatus"
+        class="subtle"
+      >{{ copyTableStatus }}</span>
       <button
         v-if="selectedKeys.length"
         type="button"
@@ -519,17 +693,17 @@ onUnmounted(() => {
         v-if="selectedKeys.length"
         type="button"
         class="good"
-        title="Add tag (t)"
+        title="Tags (t)"
         :disabled="tagSaving"
-        @click="openTagDialog('add')"
-      >Add tag…</button>
+        @click="openTagDialog"
+      >Tags…</button>
       <button
-        v-if="selectedKeys.length"
+        v-if="viewMode === 'icons' && selectedKeys.length"
         type="button"
         class="neutral"
-        :disabled="tagSaving || removableTags.length === 0"
-        @click="openTagDialog('remove')"
-      >Remove tag…</button>
+        :disabled="annotationSaving"
+        @click="openAnnotationDialog"
+      >Annotations…</button>
       <button
         v-if="selectedKeys.length"
         type="button"
@@ -550,17 +724,22 @@ onUnmounted(() => {
     <p v-else-if="projects.length === 0" class="scan-status padding">
       {{ scanning ? 'Scanning for Git projects…' : 'No Git projects found under this root.' }}
     </p>
-    <ProjectIconView
-      v-else-if="viewMode === 'icons'"
-      :rows="rows"
-      :headers="headers"
-      :selected-keys="selectedKeys"
-      :selectable="multiSelect"
-      :tag-colors="tagColors"
-      @update:selected-keys="selectedKeys = $event"
-    />
-    <Table
-      v-else
+    <div v-else class="projects-layout-views">
+      <ProjectIconView
+        v-show="viewMode === 'icons'"
+        ref="iconViewRef"
+        :rows="rows"
+        :headers="headers"
+        :selected-keys="selectedKeys"
+        :selectable="multiSelect"
+        :tag-colors="tagColors"
+        :tag-order="knownTags"
+        @update:selected-keys="selectedKeys = $event"
+        @visible-paths-changed="onIconVisiblePathsChanged"
+        @layout-summary-changed="iconsLayoutSummary = $event"
+      />
+      <Table
+        v-show="viewMode === 'table'"
       :table-id="PROJECTS_TABLE_ID"
       row-key="id"
       :data="rows"
@@ -601,14 +780,7 @@ onUnmounted(() => {
         <span v-else>—</span>
       </template>
       <template #cell-tags="{ value }">
-        <span v-if="value" class="tag-list">
-          <span
-            v-for="tag in String(value).split(', ').filter(Boolean)"
-            :key="tag"
-            class="tag"
-            :style="tagChipStyle(tagColors, tag)"
-          >{{ tag }}</span>
-        </span>
+        <ProjectTagList v-if="value" :tags="value" :tag-colors="tagColors" :tag-order="knownTags" />
         <span v-else>—</span>
       </template>
       <template #cell-actions="{ row }">
@@ -637,6 +809,7 @@ onUnmounted(() => {
         </nav>
       </template>
     </Table>
+    </div>
   </Section>
 
   <dialog
@@ -689,52 +862,78 @@ onUnmounted(() => {
     aria-labelledby="tag-dialog-title"
     @click="onTagDialogBackdropClick"
   >
-    <form method="dialog" class="root-dialog-form" @submit="onTagDialogSubmit">
-      <h2 id="tag-dialog-title">{{ tagDialogTitle }}</h2>
+    <form method="dialog" class="root-dialog-form">
+      <h2 id="tag-dialog-title">Tags</h2>
       <p class="subtle">{{ selectedKeys.length }} selected project{{ selectedKeys.length === 1 ? '' : 's' }}</p>
-      <template v-if="tagMode === 'add'">
-        <p class="subtle">Click a tag to turn it on or off for the selection. A dashed tag is only on some of the selected projects.</p>
-        <div v-if="tagSuggestions.length" class="tag-toggle-list" role="group" aria-label="Available tags">
-          <button
-            v-for="tag in tagSuggestions"
-            :key="tag"
-            type="button"
-            class="tag tag-toggle"
-            :style="tagChipStyle(tagColors, tag)"
-            :class="{
-              'tag-toggle-on': tagState(tag) === 'on',
-              'tag-toggle-mixed': tagState(tag) === 'mixed',
-            }"
-            :aria-pressed="tagPressed(tag)"
-            :disabled="tagSaving"
-            @click="toggleBulkTag(tag)"
-          >{{ tag }}</button>
-        </div>
-        <p v-else class="subtle">No tags yet.</p>
-      </template>
-      <template v-else>
-        <label for="tag-name">Tag</label>
-        <select
-          id="tag-name"
-          v-model="tagDraft"
+      <p class="subtle">Click a tag to turn it on or off for the selection. A dashed tag is only on some of the selected projects.</p>
+      <div v-if="tagSuggestions.length" class="tag-toggle-list" role="group" aria-label="Available tags">
+        <ProjectTag
+          v-for="tag in tagSuggestions"
+          :key="tag"
+          :tag="tag"
+          :tag-colors="tagColors"
+          toggle
+          :pressed="tagPressed(tag)"
+          :mixed="tagState(tag) === 'mixed'"
           :disabled="tagSaving"
-        >
-          <option v-for="tag in removableTags" :key="tag" :value="tag">{{ tag }}</option>
-        </select>
-      </template>
+          @click="toggleBulkTag(tag)"
+        />
+      </div>
+      <p v-else class="subtle">No tags yet.</p>
       <p v-if="tagDialogError" class="form-error">{{ tagDialogError }}</p>
       <fieldset>
-        <button type="submit" value="cancel" class="neutral" :disabled="tagSaving">
-          {{ tagMode === 'add' ? 'Close' : 'Cancel' }}
-        </button>
-        <button
-          v-if="tagMode === 'remove'"
-          type="submit"
-          value="save"
-          class="bad"
-          :disabled="tagSaving || removableTags.length === 0"
+        <button type="submit" value="cancel" class="neutral" :disabled="tagSaving">Close</button>
+      </fieldset>
+    </form>
+  </dialog>
+
+  <dialog
+    ref="annotationDialogRef"
+    class="root-dialog"
+    aria-labelledby="annotation-dialog-title"
+    @click="onAnnotationDialogBackdropClick"
+    @close="onAnnotationDialogClosed"
+  >
+    <form class="root-dialog-form" @submit.prevent="addBulkAnnotation">
+      <h2 id="annotation-dialog-title">Annotations</h2>
+      <p class="subtle">{{ selectedKeys.length }} selected project{{ selectedKeys.length === 1 ? '' : 's' }}</p>
+      <p class="subtle">Edit a field and tab out to apply it to every selected project.</p>
+      <div v-if="annotationKeys.length" class="annotation-list">
+        <label v-for="key in annotationKeys" :key="key" class="annotation-row">
+          <span>{{ key }}</span>
+          <input
+            v-model="annotationDrafts[key]"
+            type="text"
+            :placeholder="annotationMixed[key] ? '(mixed)' : ''"
+            :disabled="annotationSaving"
+            @blur="saveBulkAnnotation(key)"
+          >
+        </label>
+      </div>
+      <p v-else class="subtle">No annotations yet.</p>
+      <div class="detail-edit-add">
+        <input
+          v-model="newAnnotationKey"
+          type="text"
+          placeholder="New annotation key"
+          aria-label="New annotation key"
+          :disabled="annotationSaving"
         >
-          {{ tagSaving ? 'Saving…' : 'Remove tag' }}
+        <input
+          v-model="newAnnotationValue"
+          type="text"
+          placeholder="Value"
+          aria-label="New annotation value"
+          :disabled="annotationSaving"
+        >
+        <button type="submit" class="neutral" :disabled="annotationSaving || !newAnnotationKey.trim()">
+          {{ annotationSaving ? 'Saving…' : 'Add annotation' }}
+        </button>
+      </div>
+      <p v-if="annotationDialogError" class="form-error">{{ annotationDialogError }}</p>
+      <fieldset>
+        <button type="button" class="neutral" :disabled="annotationSaving" @click="annotationDialogRef?.close('cancel')">
+          Close
         </button>
       </fieldset>
     </form>

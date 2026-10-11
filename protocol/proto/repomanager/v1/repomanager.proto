@@ -1,0 +1,444 @@
+syntax = "proto3";
+
+package repomanager.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/jamesread/RepoManager/service/gen/repomanager/v1;repomanagerv1";
+
+message Features {
+  bool theme_color_scheme_switcher_enabled = 1;
+  string theme_name = 2;
+  string theme_control = 3;
+  repeated string available_themes = 4;
+  bool show_footer = 5;
+  bool show_new_versions = 6;
+  bool show_version_number = 7;
+}
+
+message InitRequest {}
+
+message InitResponse {
+  string version = 1;
+  string site_title = 2;
+  Features features = 3;
+  string current_username = 4;
+  repeated string rbac_permissions = 5;
+  bool rbac_is_superuser = 6;
+  string current_version = 7;
+  string available_version = 8;
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  bool success = 1;
+  string message = 2;
+  string token = 3;
+  int64 expires_at = 4;
+}
+
+message LogoutRequest {}
+
+message LogoutResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ValidateTokenRequest {
+  string token = 1;
+}
+
+message ValidateTokenResponse {
+  bool valid = 1;
+  string username = 2;
+  int64 expires_at = 3;
+  repeated string rbac_permissions = 4;
+  bool rbac_is_superuser = 5;
+}
+
+message ResetUserPasswordRequest {
+  string username = 1;
+  string new_password = 2;
+}
+
+message ResetUserPasswordResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ChangePasswordRequest {
+  string current_password = 1;
+  string new_password = 2;
+}
+
+message ChangePasswordResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message IamUser {
+  int32 id = 1;
+  string username = 2;
+  string created_by = 3;
+}
+
+message RbacPermission {
+  int32 id = 1;
+  string name = 2;
+  string description = 3;
+}
+
+message RbacRole {
+  int32 id = 1;
+  string name = 2;
+  string description = 3;
+  repeated int32 permission_ids = 4;
+}
+
+message UserGroup {
+  int32 id = 1;
+  string name = 2;
+  int32 member_count = 3;
+}
+
+message MyPermissionAuditRow {
+  string permission = 1;
+  bool granted = 2;
+  repeated string granting_groups = 3;
+}
+
+message ListUsersRequest {}
+message ListUsersResponse {
+  repeated IamUser users = 1;
+}
+
+message GetUserRequest {
+  int32 user_id = 1;
+}
+message GetUserResponse {
+  IamUser user = 1;
+}
+
+message CreateUserRequest {
+  string username = 1;
+  string password = 2;
+}
+message CreateUserResponse {
+  IamUser user = 1;
+}
+
+message DeleteUserRequest {
+  int32 user_id = 1;
+}
+message DeleteUserResponse {
+  bool success = 1;
+}
+
+message ListRbacPermissionsRequest {}
+message ListRbacPermissionsResponse {
+  repeated RbacPermission permissions = 1;
+}
+
+message ListRbacRolesRequest {}
+message ListRbacRolesResponse {
+  repeated RbacRole roles = 1;
+}
+
+message CreateRbacRoleRequest {
+  string name = 1;
+  string description = 2;
+  repeated int32 permission_ids = 3;
+}
+message CreateRbacRoleResponse {
+  RbacRole role = 1;
+}
+
+message UpdateRbacRoleRequest {
+  int32 role_id = 1;
+  string name = 2;
+  string description = 3;
+  repeated int32 permission_ids = 4;
+}
+message UpdateRbacRoleResponse {
+  RbacRole role = 1;
+}
+
+message DeleteRbacRoleRequest {
+  int32 role_id = 1;
+}
+message DeleteRbacRoleResponse {
+  bool success = 1;
+}
+
+message GetUserRbacRolesRequest {
+  int32 user_id = 1;
+}
+message GetUserRbacRolesResponse {
+  repeated int32 role_ids = 1;
+}
+
+message GetUserGroupRbacRolesRequest {
+  int32 group_id = 1;
+}
+message GetUserGroupRbacRolesResponse {
+  repeated int32 role_ids = 1;
+}
+
+message SetUserGroupRbacRolesRequest {
+  int32 group_id = 1;
+  repeated int32 role_ids = 2;
+}
+message SetUserGroupRbacRolesResponse {
+  bool success = 1;
+}
+
+message GetRbacRoleUsersRequest {
+  int32 role_id = 1;
+}
+message GetRbacRoleUsersResponse {
+  repeated string usernames = 1;
+}
+
+message GetRbacRoleGroupsRequest {
+  int32 role_id = 1;
+}
+message GetRbacRoleGroupsResponse {
+  repeated string group_names = 1;
+}
+
+message GetMyPermissionsAuditRequest {}
+message GetMyPermissionsAuditResponse {
+  repeated string group_names = 1;
+  repeated string role_names = 2;
+  bool is_superuser = 3;
+  repeated MyPermissionAuditRow permissions = 4;
+}
+
+message ListUserGroupsRequest {}
+message ListUserGroupsResponse {
+  repeated UserGroup groups = 1;
+}
+
+message CreateUserGroupRequest {
+  string name = 1;
+}
+message CreateUserGroupResponse {
+  UserGroup group = 1;
+}
+
+message DeleteUserGroupRequest {
+  int32 group_id = 1;
+}
+message DeleteUserGroupResponse {
+  bool success = 1;
+}
+
+message GetUserGroupMembersRequest {
+  int32 group_id = 1;
+}
+message GetUserGroupMembersResponse {
+  repeated int32 user_ids = 1;
+}
+
+message SetUserGroupMembersRequest {
+  int32 group_id = 1;
+  repeated int32 user_ids = 2;
+}
+message SetUserGroupMembersResponse {
+  bool success = 1;
+}
+
+message Cvar {
+  string key = 1;
+  string main_type = 2;
+  int32 value_int = 3;
+  string value_string = 4;
+  string title = 5;
+  string description = 6;
+  string category = 7;
+  int32 ordinal = 8;
+}
+
+message ListCvarsRequest {}
+message ListCvarsResponse {
+  repeated Cvar cvars = 1;
+}
+
+message UpdateCvarRequest {
+  string key = 1;
+  int32 value_int = 2;
+  string value_string = 3;
+}
+message UpdateCvarResponse {
+  Cvar cvar = 1;
+}
+
+message Field {
+  string id = 1;
+  string label = 2;
+  string kind = 3;
+  bool sortable = 4;
+  bool filterable = 5;
+}
+
+message Project {
+  string path = 1;
+  string rel = 2;
+  repeated string tags = 3;
+  google.protobuf.Struct meta = 4;
+  map<string, string> annotations = 5;
+}
+
+message ListProjectsRequest {}
+message ListProjectsResponse {
+  string root = 1;
+  bool scanning = 2;
+  int32 found = 3;
+  repeated Field fields = 4;
+  repeated Project projects = 5;
+  repeated string recent_roots = 6;
+  repeated string known_tags = 7;
+  map<string, string> tag_colors = 8;
+}
+
+message GetProjectRequest {
+  string path = 1;
+}
+message GetProjectResponse {
+  string root = 1;
+  repeated Field fields = 2;
+  Project project = 3;
+  repeated string known_tags = 4;
+  map<string, string> tag_colors = 5;
+}
+
+message RefreshProjectsRequest {
+  repeated string paths = 1;
+}
+
+message DeleteProjectRequest {
+  string path = 1;
+}
+
+message SetRootRequest {
+  string root = 1;
+}
+
+message RescanRequest {}
+
+message MutateTagsRequest {
+  repeated string paths = 1;
+  string tag = 2;
+  string op = 3;
+}
+
+message SetAnnotationRequest {
+  string path = 1;
+  string key = 2;
+  string value = 3;
+}
+
+message ProjectView {
+  int32 id = 1;
+  string name = 2;
+  string state_json = 3;
+  bool is_default = 4;
+  int64 created_at = 5;
+  int64 updated_at = 6;
+}
+
+message ListProjectViewsRequest {}
+message ListProjectViewsResponse {
+  repeated ProjectView views = 1;
+  int32 default_view_id = 2;
+}
+
+message SaveProjectViewRequest {
+  string name = 1;
+  string state_json = 2;
+  bool set_as_default = 3;
+}
+message SaveProjectViewResponse {
+  ProjectView view = 1;
+  int32 default_view_id = 2;
+}
+
+message DeleteProjectViewRequest {
+  int32 view_id = 1;
+}
+message DeleteProjectViewResponse {
+  int32 default_view_id = 1;
+}
+
+message SetDefaultProjectViewRequest {
+  int32 view_id = 1;
+}
+message SetDefaultProjectViewResponse {
+  int32 default_view_id = 1;
+}
+
+message DatabaseStatusRequest {}
+message DatabaseStatusResponse {
+  string driver = 1;
+  string dsn_redacted = 2;
+  string host = 3;
+  string database = 4;
+  bool connected = 5;
+  string connection_error = 6;
+  string required_migration = 7;
+  string latest_migration = 8;
+  bool migrations_ok = 9;
+  repeated string applied_migrations = 10;
+}
+
+service RepoManagerService {
+  rpc Init(InitRequest) returns (InitResponse);
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  rpc ResetUserPassword(ResetUserPasswordRequest) returns (ResetUserPasswordResponse);
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+  rpc ListRbacPermissions(ListRbacPermissionsRequest) returns (ListRbacPermissionsResponse);
+  rpc ListRbacRoles(ListRbacRolesRequest) returns (ListRbacRolesResponse);
+  rpc CreateRbacRole(CreateRbacRoleRequest) returns (CreateRbacRoleResponse);
+  rpc UpdateRbacRole(UpdateRbacRoleRequest) returns (UpdateRbacRoleResponse);
+  rpc DeleteRbacRole(DeleteRbacRoleRequest) returns (DeleteRbacRoleResponse);
+  rpc GetUserRbacRoles(GetUserRbacRolesRequest) returns (GetUserRbacRolesResponse);
+  rpc GetUserGroupRbacRoles(GetUserGroupRbacRolesRequest) returns (GetUserGroupRbacRolesResponse);
+  rpc SetUserGroupRbacRoles(SetUserGroupRbacRolesRequest) returns (SetUserGroupRbacRolesResponse);
+  rpc GetRbacRoleUsers(GetRbacRoleUsersRequest) returns (GetRbacRoleUsersResponse);
+  rpc GetRbacRoleGroups(GetRbacRoleGroupsRequest) returns (GetRbacRoleGroupsResponse);
+  rpc GetMyPermissionsAudit(GetMyPermissionsAuditRequest) returns (GetMyPermissionsAuditResponse);
+  rpc ListUserGroups(ListUserGroupsRequest) returns (ListUserGroupsResponse);
+  rpc CreateUserGroup(CreateUserGroupRequest) returns (CreateUserGroupResponse);
+  rpc DeleteUserGroup(DeleteUserGroupRequest) returns (DeleteUserGroupResponse);
+  rpc GetUserGroupMembers(GetUserGroupMembersRequest) returns (GetUserGroupMembersResponse);
+  rpc SetUserGroupMembers(SetUserGroupMembersRequest) returns (SetUserGroupMembersResponse);
+
+  rpc ListCvars(ListCvarsRequest) returns (ListCvarsResponse);
+  rpc UpdateCvar(UpdateCvarRequest) returns (UpdateCvarResponse);
+  rpc GetDatabaseStatus(DatabaseStatusRequest) returns (DatabaseStatusResponse);
+
+  rpc ListProjectViews(ListProjectViewsRequest) returns (ListProjectViewsResponse);
+  rpc SaveProjectView(SaveProjectViewRequest) returns (SaveProjectViewResponse);
+  rpc DeleteProjectView(DeleteProjectViewRequest) returns (DeleteProjectViewResponse);
+  rpc SetDefaultProjectView(SetDefaultProjectViewRequest) returns (SetDefaultProjectViewResponse);
+
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
+  rpc GetProject(GetProjectRequest) returns (GetProjectResponse);
+  rpc RefreshProjects(RefreshProjectsRequest) returns (ListProjectsResponse);
+  rpc DeleteProject(DeleteProjectRequest) returns (ListProjectsResponse);
+  rpc SetRoot(SetRootRequest) returns (ListProjectsResponse);
+  rpc Rescan(RescanRequest) returns (ListProjectsResponse);
+  rpc MutateTags(MutateTagsRequest) returns (ListProjectsResponse);
+  rpc SetAnnotation(SetAnnotationRequest) returns (GetProjectResponse);
+}

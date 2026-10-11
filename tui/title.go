@@ -40,6 +40,8 @@ func filterFieldShort(fieldID string) string {
 		return "gh.iss"
 	case helpers.FieldGitHubOpenPRs:
 		return "gh.pr"
+	case helpers.FieldGitHubIsFork:
+		return "gh.fork"
 	case helpers.FieldModules:
 		return "mods"
 	default:

@@ -8,7 +8,7 @@ import (
 )
 
 // Found is a project discovered by Scan: the directory holding .git and its
-// path relative to the scan root.
+// display name (RepoName of that directory).
 type Found struct {
 	Path string
 	Rel  string
@@ -18,6 +18,7 @@ type Found struct {
 // rather than the user's own projects.
 var skipDirs = map[string]bool{
 	"node_modules": true, "vendor": true, ".cache": true, "target": true, "dist": true, "build": true,
+	".compat-worktrees": true, ".worktrees": true,
 }
 
 // Scan walks root and calls onFound once for each directory that contains a
@@ -52,6 +53,9 @@ func Scan(root string, onFound func(Found)) error {
 		}
 
 		projectDir := filepath.Dir(path)
+		if !isPrimaryGitCheckout(projectDir) {
+			return nil
+		}
 		if _, ok := seen[projectDir]; ok {
 			if d.IsDir() {
 				return fs.SkipDir
@@ -60,12 +64,9 @@ func Scan(root string, onFound func(Found)) error {
 		}
 		seen[projectDir] = struct{}{}
 
-		rel, relErr := filepath.Rel(root, projectDir)
-		if relErr != nil {
-			rel = projectDir
-		}
-		if rel == "." {
-			rel = filepath.Base(projectDir) + " (cwd)"
+		rel := RepoName(projectDir)
+		if filepath.Clean(projectDir) == root {
+			rel += " (cwd)"
 		}
 
 		onFound(Found{Path: projectDir, Rel: rel})
@@ -77,7 +78,7 @@ func Scan(root string, onFound func(Found)) error {
 	})
 }
 
-// Find returns every project under root, ordered by relative path
+// Find returns every project under root, ordered by repo name
 // (case-insensitively).
 func Find(root string) ([]Found, error) {
 	var projects []Found

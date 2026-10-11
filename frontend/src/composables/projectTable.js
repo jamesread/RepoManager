@@ -16,6 +16,24 @@ import {
 
 export const PROJECTS_TABLE_ID = 'plist-projects'
 
+/** Select filter token: annotation field is empty or missing. */
+export const ANNOTATION_FILTER_UNSET = '__annotation_unset__'
+
+/** Prefix for select filter tokens that exclude a specific annotation value. */
+export const ANNOTATION_FILTER_EXCLUDE_PREFIX = '__exclude__:'
+
+export function annotationExcludeToken(value) {
+  return `${ANNOTATION_FILTER_EXCLUDE_PREFIX}${value}`
+}
+
+export function isAnnotationExcludeToken(token) {
+  return String(token || '').startsWith(ANNOTATION_FILTER_EXCLUDE_PREFIX)
+}
+
+export function annotationExcludeTokenValue(token) {
+  return String(token).slice(ANNOTATION_FILTER_EXCLUDE_PREFIX.length)
+}
+
 /** Split a joined multi-value cell ("Git, GitHub") into discrete tokens. */
 export function splitCellTokens(value) {
   if (Array.isArray(value)) {
@@ -55,9 +73,76 @@ export function collectExactFilterOptions(projects, fieldID, projectFieldValue) 
     .map((value) => ({ value, label: value }))
 }
 
+/** Annotation select options: unset, has value, and does-not-have value. */
+export function collectAnnotationFilterOptions(projects, fieldID, projectFieldValue) {
+  const options = [{ value: ANNOTATION_FILTER_UNSET, label: '(unset)' }]
+  for (const opt of collectExactFilterOptions(projects, fieldID, projectFieldValue)) {
+    options.push({ value: opt.value, label: opt.label })
+    options.push({
+      value: annotationExcludeToken(opt.value),
+      label: `(not) ${opt.label}`,
+    })
+  }
+  return options
+}
+
+export function normalizeAnnotationCellValue(value) {
+  if (value == null || value === '') return ''
+  return String(value).trim()
+}
+
+export function rowMatchesAnnotationSelect(cellValue, filter) {
+  const selected = Array.isArray(filter?.values) ? filter.values.map(String) : []
+  if (selected.length === 0) return true
+
+  const str = normalizeAnnotationCellValue(cellValue)
+  const includes = []
+  const excludes = []
+  let wantUnset = false
+
+  for (const token of selected) {
+    if (token === ANNOTATION_FILTER_UNSET) {
+      wantUnset = true
+    } else if (isAnnotationExcludeToken(token)) {
+      excludes.push(annotationExcludeTokenValue(token))
+    } else {
+      includes.push(token)
+    }
+  }
+
+  if (excludes.some((value) => value === str)) {
+    return false
+  }
+
+  if (wantUnset && str === '') {
+    return true
+  }
+  if (includes.some((value) => value === str)) {
+    return true
+  }
+  if (includes.length === 0 && !wantUnset && excludes.length > 0) {
+    return true
+  }
+
+  return includes.length === 0 && !wantUnset
+}
+
 function rowMatchesMultiSelect(cellValue, selectedValues) {
   const tokens = new Set(splitCellTokens(cellValue))
   return selectedValues.some((selected) => tokens.has(String(selected)))
+}
+
+/** Path "contains" excludes rows whose path includes the value (inverted). */
+export function rowMatchesPathTextFilter(cellValue, filter) {
+  if (filter?.type !== 'text' || filter.operator !== 'contains') {
+    return null
+  }
+  const needle = String(filter.value ?? '').trim().toLowerCase()
+  if (!needle) {
+    return true
+  }
+  const haystack = cellValue == null ? '' : String(cellValue).toLowerCase()
+  return !haystack.includes(needle)
 }
 
 function applyColumnFilters(row, header, columnQuery) {
@@ -71,8 +156,17 @@ function applyColumnFilters(row, header, columnQuery) {
   }
 
   const matchFilter = (filter) => {
+    if (filter.type === 'select' && header.key?.startsWith('annotation.')) {
+      return rowMatchesAnnotationSelect(row?.[header.key], filter)
+    }
     if (filter.type === 'select' && header.multiValue) {
       return rowMatchesMultiSelect(row?.[header.key], filter.values)
+    }
+    if (header.key === 'path') {
+      const inverted = rowMatchesPathTextFilter(row?.[header.key], filter)
+      if (inverted !== null) {
+        return inverted
+      }
     }
     return applyColumnFilter(row, header, filter)
   }
@@ -115,10 +209,13 @@ export function buildProjectsFilterQuery(filtersByKey) {
   const columns = []
   for (const [key, partial] of Object.entries(filtersByKey || {})) {
     if (!partial || typeof partial !== 'object') continue
+    const entries = Array.isArray(partial) ? partial : [partial]
+    const filters = entries.filter(Boolean)
+    if (filters.length === 0) continue
     columns.push({
       key,
       match: 'all',
-      filters: [partial],
+      filters,
     })
   }
   return {
@@ -126,6 +223,15 @@ export function buildProjectsFilterQuery(filtersByKey) {
     match: 'all',
     columns,
   }
+}
+
+/** Row ids currently matching active table/icon filters (not paginated). */
+export function visibleFilteredProjectIds(rows, headers, filtersByKey) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return new Set()
+  }
+  const filtered = applyProjectsFilterQuery(rows, headers, buildProjectsFilterQuery(filtersByKey))
+  return new Set(filtered.map((row) => row.id).filter(Boolean))
 }
 
 export function createProjectsFetchRows(getRows, getHeaders) {
@@ -169,4 +275,38 @@ export function createLocalLayoutPresets(tableId = PROJECTS_TABLE_ID) {
       return setDefaultPreset(tableId, presetId)
     },
   }
+}
+
+/** Escape a cell for tab-separated paste into spreadsheets. */
+export function escapeSpreadsheetCell(value) {
+  if (value == null) {
+    return ''
+  }
+  const text = String(value)
+  if (/[\t\n\r"]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`
+  }
+  return text
+}
+
+/** Tab-separated table (header + rows) for the current visible columns and selection. */
+export function buildProjectsSpreadsheetTSV(rows, headers, columnVisibility, selectedKeys) {
+  const cols = (headers || []).filter((header) => {
+    if (header.key === 'actions') {
+      return false
+    }
+    if (columnVisibility?.[header.key] === false) {
+      return false
+    }
+    return true
+  })
+  const selected = new Set(selectedKeys || [])
+  const selectedRows = (rows || []).filter((row) => selected.has(row.id))
+  const lines = [
+    cols.map((header) => escapeSpreadsheetCell(header.label)).join('\t'),
+    ...selectedRows.map((row) =>
+      cols.map((header) => escapeSpreadsheetCell(row[header.key])).join('\t'),
+    ),
+  ]
+  return lines.join('\n')
 }

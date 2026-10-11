@@ -8,6 +8,7 @@ package helpers
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ const (
 	FieldString FieldKind = "string"
 	FieldTime   FieldKind = "time"
 	FieldInt    FieldKind = "int"
+	FieldBool   FieldKind = "bool"
 	FieldMulti  FieldKind = "multi" // e.g. topic lists
 )
 
@@ -191,6 +193,15 @@ func (e *Engine) schedule(projectPath string, force bool) {
 	if e == nil || projectPath == "" {
 		return
 	}
+	mode := "enrich"
+	if force {
+		mode = "refresh"
+	}
+	slog.Info("project helpers scheduled",
+		"path", projectPath,
+		"mode", mode,
+		"helpers", len(e.slots),
+	)
 	for i := range e.slots {
 		slot := e.slots[i]
 		e.wg.Add(1)
@@ -200,12 +211,30 @@ func (e *Engine) schedule(projectPath string, force bool) {
 
 func (e *Engine) runOne(slot helperSlot, projectPath string, force bool) {
 	defer e.wg.Done()
+	helper := slot.helper.Name()
+	mode := "enrich"
+	if force {
+		mode = "refresh"
+	}
 	select {
 	case slot.sem <- struct{}{}:
 	case <-e.ctx.Done():
+		slog.Debug("project helper skipped: engine stopped before acquire",
+			"helper", helper,
+			"path", projectPath,
+			"mode", mode,
+		)
 		return
 	}
 	defer func() { <-slot.sem }()
+
+	slog.Info("project helper running",
+		"helper", helper,
+		"path", projectPath,
+		"mode", mode,
+		"force", force,
+	)
+	start := time.Now()
 
 	var (
 		meta map[string]any
@@ -221,17 +250,41 @@ func (e *Engine) runOne(slot helperSlot, projectPath string, force bool) {
 		meta, err = slot.helper.Collect(e.ctx, projectPath)
 	}
 	if e.ctx.Err() != nil {
+		slog.Debug("project helper cancelled",
+			"helper", helper,
+			"path", projectPath,
+			"mode", mode,
+			"duration", time.Since(start),
+		)
 		return
 	}
 	msg := MetaMsg{
 		Path:   projectPath,
-		Helper: slot.helper.Name(),
+		Helper: helper,
 		Meta:   meta,
 		Err:    err,
+	}
+	attrs := []any{
+		"helper", helper,
+		"path", projectPath,
+		"mode", mode,
+		"duration", time.Since(start),
+		"meta_keys", len(meta),
+	}
+	if err != nil {
+		attrs = append(attrs, "err", err)
+		slog.Warn("project helper finished with error", attrs...)
+	} else {
+		slog.Info("project helper finished", attrs...)
 	}
 	select {
 	case e.events <- msg:
 	case <-e.ctx.Done():
+		slog.Debug("project helper result dropped: engine stopped before emit",
+			"helper", helper,
+			"path", projectPath,
+			"mode", mode,
+		)
 	}
 }
 
@@ -258,6 +311,11 @@ func FormatMetaValue(v any) string {
 		return fmt.Sprintf("%d", t)
 	case int64:
 		return fmt.Sprintf("%d", t)
+	case bool:
+		if t {
+			return "yes"
+		}
+		return "no"
 	default:
 		if v == nil {
 			return ""
@@ -271,6 +329,13 @@ func MetaValuesForBrowse(field Field, v any) []string {
 		return nil
 	}
 	switch field.Kind {
+	case FieldBool:
+		if b, ok := v.(bool); ok {
+			if b {
+				return []string{"yes"}
+			}
+			return []string{"no"}
+		}
 	case FieldMulti:
 		switch t := v.(type) {
 		case []string:
@@ -353,6 +418,19 @@ func CompareMeta(kind FieldKind, a, b any) int {
 		default:
 			return 0
 		}
+	case FieldBool:
+		ba, oka := a.(bool)
+		bb, okb := b.(bool)
+		if !oka || !okb {
+			return 0
+		}
+		if ba == bb {
+			return 0
+		}
+		if !ba && bb {
+			return -1
+		}
+		return 1
 	default:
 		sa := strings.ToLower(fmt.Sprintf("%v", a))
 		sb := strings.ToLower(fmt.Sprintf("%v", b))

@@ -4,17 +4,19 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Section from 'picocrank/vue/components/Section.vue'
 import DangerZone from 'picocrank/vue/components/DangerZone.vue'
 import ProjectIcon from '../components/ProjectIcon.vue'
+import ProjectTag from '../components/ProjectTag.vue'
+import ProjectTagList from '../components/ProjectTagList.vue'
 import {
   deleteProject,
   fetchProject,
   formatCellValue,
+  isProjectNotFoundError,
   projectFieldValue,
   projectIconURL,
   refreshProject,
   resolveFields,
   setProjectAnnotation,
   setProjectTags,
-  tagChipStyle,
   isHelperTag,
 } from '../composables/api'
 import { projectsListLocation } from '../composables/projectView'
@@ -34,6 +36,7 @@ const project = ref(null)
 const knownTags = ref([])
 const tagColors = ref({})
 const error = ref('')
+const missing = ref(false)
 const editError = ref('')
 const loading = ref(true)
 const refreshing = ref(false)
@@ -48,8 +51,15 @@ const newAnnotationValue = ref('')
 const annotationDrafts = ref({})
 const activeEdit = ref('')
 let timer = null
+let loadSeq = 0
 
-const title = computed(() => project.value?.rel || 'Project')
+const title = computed(() => {
+  if (missing.value) {
+    const parts = String(props.path || '').split(/[/\\]/).filter(Boolean)
+    return parts[parts.length - 1] || 'Project'
+  }
+  return project.value?.rel || 'Project'
+})
 const backTo = computed(() => projectsListLocation())
 const hasLocalChanges = computed(() => (project.value?.tags || []).includes('changes'))
 
@@ -97,6 +107,13 @@ const detailRows = computed(() => {
   }
   return rows
 })
+
+function packageURLHref(value) {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return text
+  return `https://${text}`
+}
 
 const githubURL = computed(() => {
   const meta = project.value?.meta || {}
@@ -191,15 +208,32 @@ async function load() {
     project.value = null
     return
   }
+  const path = props.path
+  const seq = ++loadSeq
   try {
-    const data = await fetchProject(props.path)
+    const data = await fetchProject(path)
+    if (seq !== loadSeq || path !== props.path) {
+      return
+    }
     applyProject(data)
     error.value = ''
+    missing.value = false
   } catch (e) {
-    error.value = e.message || String(e)
+    if (seq !== loadSeq || path !== props.path) {
+      return
+    }
+    if (isProjectNotFoundError(e)) {
+      missing.value = true
+      error.value = ''
+    } else {
+      missing.value = false
+      error.value = e.message || String(e)
+    }
     project.value = null
   } finally {
-    loading.value = false
+    if (seq === loadSeq && path === props.path) {
+      loading.value = false
+    }
   }
 }
 
@@ -369,29 +403,35 @@ onUnmounted(() => {
       </span>
     </template>
     <template #toolbar>
-      <button
-        type="button"
-        class="neutral"
-        :disabled="!project"
-        @click="openEditDialog"
-      >Tags & annotations</button>
-      <button
-        type="button"
-        class="neutral"
-        :disabled="refreshing || !path"
-        @click="onRefresh"
-      >{{ refreshing ? 'Refreshing…' : 'Refresh' }}</button>
+      <template v-if="!missing">
+        <button
+          type="button"
+          class="neutral"
+          :disabled="!project"
+          @click="openEditDialog"
+        >Tags & annotations</button>
+        <button
+          type="button"
+          class="neutral"
+          :disabled="refreshing || !path"
+          @click="onRefresh"
+        >{{ refreshing ? 'Refreshing…' : 'Refresh' }}</button>
+        <a
+          v-if="githubURL"
+          class="button"
+          :href="githubURL"
+          target="_blank"
+          rel="noopener noreferrer"
+        >GitHub</a>
+      </template>
       <RouterLink :to="backTo" class="button neutral">Back</RouterLink>
-      <a
-        v-if="githubURL"
-        class="button"
-        :href="githubURL"
-        target="_blank"
-        rel="noopener noreferrer"
-      >GitHub</a>
     </template>
 
-    <p v-if="loading && !project" class="scan-status padding">Loading…</p>
+    <p v-if="loading && !project && !missing" class="scan-status padding">Loading…</p>
+    <div v-else-if="missing" class="project-missing padding">
+      <p>This project no longer exists. The directory may have been moved or deleted locally.</p>
+      <p v-if="path" class="project-path">{{ path }}</p>
+    </div>
     <p v-else-if="error && !project" class="form-error padding">{{ error }}</p>
     <div v-else-if="project" class="section-content padding">
       <p v-if="error" class="form-error">{{ error }}</p>
@@ -400,13 +440,14 @@ onUnmounted(() => {
           <dt>{{ row.label }}</dt>
           <dd>
             <template v-if="row.id === 'modules' || row.id === 'tags' || row.kind === 'multi'">
-              <span v-if="listValues(row.value).length" class="tag-list">
-                <span
-                  v-for="item in listValues(row.value)"
-                  :key="item"
-                  class="tag"
-                  :style="row.id === 'tags' ? tagChipStyle(tagColors, item) : null"
-                >{{ item }}</span>
+              <ProjectTagList
+                v-if="row.id === 'tags' && listValues(row.value).length"
+                :tags="row.value"
+                :tag-colors="tagColors"
+                :tag-order="knownTags"
+              />
+              <span v-else-if="listValues(row.value).length" class="tag-list">
+                <span v-for="item in listValues(row.value)" :key="item" class="tag">{{ item }}</span>
               </span>
               <span v-else>—</span>
             </template>
@@ -414,6 +455,12 @@ onUnmounted(() => {
             <a
               v-else-if="row.id === 'github.full_name' && githubURL"
               :href="githubURL"
+              target="_blank"
+              rel="noopener noreferrer"
+            >{{ displayValue(row) }}</a>
+            <a
+              v-else-if="row.id === 'github.latest_package_url' && row.value"
+              :href="packageURLHref(row.value)"
               target="_blank"
               rel="noopener noreferrer"
             >{{ displayValue(row) }}</a>
@@ -468,17 +515,16 @@ onUnmounted(() => {
         <div>
           <div class="detail-edit-title">Tags</div>
           <div v-if="tagSuggestions.length" class="tag-toggle-list" role="group" aria-label="Tags">
-            <button
+            <ProjectTag
               v-for="tag in tagSuggestions"
               :key="tag"
-              type="button"
-              class="tag tag-toggle"
-              :class="{ 'tag-toggle-on': projectHasTag(tag) }"
-              :style="tagChipStyle(tagColors, tag)"
-              :aria-pressed="projectHasTag(tag)"
+              :tag="tag"
+              :tag-colors="tagColors"
+              toggle
+              :pressed="projectHasTag(tag)"
               :disabled="saving"
               @click="toggleTag(tag)"
-            >{{ tag }}</button>
+            />
           </div>
           <p v-else class="subtle">No tags yet.</p>
           <form class="detail-edit-add" @submit.prevent="addTag">

@@ -1,0 +1,5 @@
+site_title: RepoManager Test
+database_url: file:../../tmp/repomanager-test.db?_foreign_keys=on
+
+auth:
+  baseDir: ../../tmp/httpauthshim-test

@@ -1,13 +1,27 @@
 <script setup>
 import Header from 'picocrank/vue/components/Header.vue'
 import { HugeiconsIcon } from '@hugeicons/vue'
-import { LayoutGridIcon, RefreshIcon, TableIcon } from '@hugeicons/core-free-icons'
+import { LayoutGridIcon, RefreshIcon, Settings01Icon, TableIcon } from '@hugeicons/core-free-icons'
 import { computed, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { refreshRoot } from '../composables/api'
+import { canAccessControlPanel } from '../composables/rbacAccess.js'
+import { useInit } from '../composables/useInit.js'
 
 const route = useRoute()
+const router = useRouter()
+const init = useInit()
 const refreshing = ref(false)
+
+const username = computed(() => init.user?.username ?? '')
+const themeToggleEnabled = computed(
+  () => !!init.user && init.features.themeColorSchemeSwitcherEnabled,
+)
+const showControlPanel = computed(() => !!init.user && canAccessControlPanel())
+
+function goToUserControlPanel() {
+  router.push({ name: 'userControlPanel' })
+}
 
 async function onRefreshRoot() {
   if (refreshing.value) return
@@ -53,10 +67,22 @@ const navigation = computed(() => ({
     :top-bar-navigation="navigation"
     :sidebar-enabled="false"
     :top-bar-enabled="true"
-    :theme-toggle-enabled="true"
+    :username="username"
+    :theme-toggle-enabled="themeToggleEnabled"
+    :login-route="{ name: 'login' }"
     :show-branding="true"
+    @user-click="goToUserControlPanel"
   >
     <template #toolbar>
+      <RouterLink
+        v-if="showControlPanel"
+        :to="{ name: 'control-panel' }"
+        class="neutral header-control-panel-link"
+        title="System Control Panel"
+        aria-label="System Control Panel"
+      >
+        <HugeiconsIcon :icon="Settings01Icon" width="1em" height="1em" />
+      </RouterLink>
       <button
         type="button"
         class="neutral"

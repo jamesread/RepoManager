@@ -12,41 +12,118 @@ export const builtinFields = [
   { id: 'github.topics', label: 'GitHub topics', kind: 'multi', sortable: false, filterable: true },
   { id: 'github.open_issues', label: 'GitHub open issues', kind: 'int', sortable: true, filterable: true },
   { id: 'github.open_prs', label: 'GitHub open PRs', kind: 'int', sortable: true, filterable: true },
+  { id: 'github.is_fork', label: 'GitHub fork', kind: 'bool', sortable: true, filterable: true },
+  { id: 'github.is_archived', label: 'GitHub archived', kind: 'bool', sortable: true, filterable: true },
+  { id: 'github.latest_package', label: 'GitHub latest package', kind: 'string', sortable: true, filterable: true },
+  { id: 'github.latest_package_type', label: 'GitHub latest package type', kind: 'string', sortable: true, filterable: true },
+  { id: 'github.latest_package_url', label: 'GitHub latest package URL', kind: 'string', sortable: true, filterable: true },
 ]
 
-/** Columns that match the TUI table but stay off by default until enabled. */
 export const defaultHiddenFieldIDs = [
   'github.owner',
   'github.repo',
   'github.full_name',
   'github.topics',
+  'github.latest_package',
+  'github.latest_package_type',
+  'github.latest_package_url',
 ]
 
-export async function fetchProjects() {
-  const res = await fetch('/api/projects')
-  if (!res.ok) {
-    throw new Error(`Failed to load projects (${res.status})`)
+import { Code, ConnectError } from '@connectrpc/connect'
+import { client } from './client.js'
+
+export function isProjectNotFoundError(err) {
+  if (err instanceof ConnectError) {
+    return err.code === Code.NotFound
   }
-  return res.json()
+  return String(err?.message || err).toLowerCase().includes('not found')
+}
+
+export function structToObject(struct) {
+  if (!struct) return {}
+  if (struct.fields && typeof struct.fields === 'object' && !Array.isArray(struct.fields)) {
+    const out = {}
+    for (const [key, value] of Object.entries(struct.fields)) {
+      out[key] = valueToJS(value)
+    }
+    return out
+  }
+  if (typeof struct === 'object' && !Array.isArray(struct)) {
+    return { ...struct }
+  }
+  return {}
+}
+
+function valueToJS(value) {
+  if (value == null) return null
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value
+  }
+  if (Array.isArray(value)) {
+    return value.map(valueToJS)
+  }
+  if ('stringValue' in value) return value.stringValue
+  if ('numberValue' in value) return value.numberValue
+  if ('boolValue' in value) return value.boolValue
+  if ('listValue' in value) return value.listValue.values?.map(valueToJS) ?? []
+  if ('structValue' in value) return structToObject(value.structValue)
+  return null
+}
+
+function projectFromProto(p) {
+  return {
+    path: p.path,
+    rel: p.rel,
+    tags: p.tags ?? [],
+    meta: structToObject(p.meta),
+    annotations: { ...(p.annotations ?? {}) },
+  }
+}
+
+function listBody(res) {
+  return {
+    root: res.root,
+    scanning: res.scanning,
+    found: res.found,
+    fields: (res.fields ?? []).map((f) => ({
+      id: f.id,
+      label: f.label,
+      kind: f.kind,
+      sortable: f.sortable,
+      filterable: f.filterable,
+    })),
+    projects: (res.projects ?? []).map(projectFromProto),
+    recent_roots: res.recentRoots ?? [],
+    known_tags: res.knownTags ?? [],
+    tag_colors: { ...(res.tagColors ?? {}) },
+  }
+}
+
+export async function fetchProjects() {
+  const res = await client.listProjects({})
+  return listBody(res)
 }
 
 export async function refreshRoot() {
-  const res = await fetch('/api/scan', { method: 'POST' })
-  if (!res.ok) {
-    throw new Error(`Failed to refresh projects (${res.status})`)
-  }
-  return res.json()
+  const res = await client.rescan({})
+  return listBody(res)
 }
 
 export async function fetchProject(path) {
-  const res = await fetch(`/api/project?path=${encodeURIComponent(path)}`)
-  if (res.status === 404) {
-    throw new Error('Project not found')
+  const res = await client.getProject({ path })
+  return {
+    root: res.root,
+    fields: (res.fields ?? []).map((f) => ({
+      id: f.id,
+      label: f.label,
+      kind: f.kind,
+      sortable: f.sortable,
+      filterable: f.filterable,
+    })),
+    project: projectFromProto(res.project),
+    known_tags: res.knownTags ?? [],
+    tag_colors: { ...(res.tagColors ?? {}) },
   }
-  if (!res.ok) {
-    throw new Error(`Failed to load project (${res.status})`)
-  }
-  return res.json()
 }
 
 export async function refreshProject(path) {
@@ -54,113 +131,109 @@ export async function refreshProject(path) {
 }
 
 export async function refreshProjects(paths) {
-  const res = await fetch('/api/project/refresh', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ paths }),
-  })
-  if (res.status === 404) {
-    throw new Error('Project not found')
-  }
-  if (!res.ok) {
-    throw new Error(`Failed to refresh project (${res.status})`)
-  }
-  return res.json()
+  const res = await client.refreshProjects({ paths })
+  return listBody(res)
 }
 
 export async function deleteProject(path) {
-  const res = await fetch('/api/project/delete', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path }),
-  })
-  if (res.status === 409) {
-    throw new Error('This project has local changes')
-  }
-  if (res.status === 404) {
-    throw new Error('Project not found')
-  }
-  if (!res.ok) {
-    let message = `Failed to delete project (${res.status})`
-    try {
-      const text = (await res.text()).trim()
-      if (text) message = text
-    } catch {
-      // keep status message
+  try {
+    const res = await client.deleteProject({ path })
+    return listBody(res)
+  } catch (e) {
+    if (String(e.message || e).includes('local changes')) {
+      throw new Error('This project has local changes')
     }
-    throw new Error(message)
+    throw e
   }
-  return res.json()
 }
 
 export async function setRoot(root) {
-  const res = await fetch('/api/root', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ root }),
-  })
-  if (!res.ok) {
-    let message = `Failed to change root (${res.status})`
-    try {
-      const text = (await res.text()).trim()
-      if (text) message = text
-    } catch {
-      // keep status message
-    }
-    throw new Error(message)
-  }
-  return res.json()
+  const res = await client.setRoot({ root })
+  return listBody(res)
 }
 
 const helperTags = new Set(['changes', 'ahead', 'behind'])
 
-/** Tags written by helpers. Users can see them, but not add or remove them. */
+export const githubTagName = 'GitHub'
+export const gitTagName = 'Git'
+export const maxVisibleProjectTags = 3
+
 export function isHelperTag(tag) {
   return helperTags.has(String(tag || '').trim().toLowerCase())
 }
 
-export async function setProjectTags({ paths, tag, op }) {
-  const res = await fetch('/api/tags', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ paths, tag, op }),
-  })
-  if (!res.ok) {
-    let message = `Failed to ${op === 'remove' ? 'remove' : 'add'} tag (${res.status})`
-    try {
-      const text = (await res.text()).trim()
-      if (text) message = text
-    } catch {
-      // keep status message
-    }
-    throw new Error(message)
+export function isGitHubTag(tag) {
+  return String(tag || '').trim() === githubTagName
+}
+
+export function isGitTag(tag) {
+  return String(tag || '').trim() === gitTagName
+}
+
+export function parseTagList(tags) {
+  if (Array.isArray(tags)) return tags.map((tag) => String(tag || '').trim()).filter(Boolean)
+  return String(tags || '')
+    .split(', ')
+    .map((tag) => tag.trim())
+    .filter(Boolean)
+}
+
+export function sortTagsByOrder(tags, order = []) {
+  const rank = new Map()
+  for (let i = 0; i < order.length; i++) {
+    const tag = order[i]
+    if (!rank.has(tag)) rank.set(tag, i)
   }
-  return res.json()
+  return [...tags].sort((a, b) => {
+    const ai = rank.has(a) ? rank.get(a) : Number.POSITIVE_INFINITY
+    const bi = rank.has(b) ? rank.get(b) : Number.POSITIVE_INFINITY
+    if (ai !== bi) return ai - bi
+    return a.localeCompare(b, undefined, { sensitivity: 'base' })
+  })
+}
+
+/** Tags for compact UI: GitHub icon is extra; Git is hidden when GitHub is present. */
+export function displayProjectTags(tags, { maxVisible = maxVisibleProjectTags, tagOrder = [] } = {}) {
+  const list = parseTagList(tags)
+  let working = list
+  if (list.some(isGitHubTag) && list.some(isGitTag)) {
+    working = list.filter((tag) => !isGitTag(tag))
+  }
+
+  const github = working.filter(isGitHubTag)
+  const others = working.filter((tag) => !isGitHubTag(tag))
+  const sortedOthers = sortTagsByOrder(others, tagOrder)
+  const visibleOthers = sortedOthers.slice(0, maxVisible)
+  const hiddenCount = Math.max(0, sortedOthers.length - visibleOthers.length)
+
+  return {
+    visible: [...github, ...visibleOthers],
+    hiddenCount,
+  }
+}
+
+export async function setProjectTags({ paths, tag, op }) {
+  const res = await client.mutateTags({ paths, tag, op })
+  return listBody(res)
 }
 
 export async function setProjectAnnotation({ path, key, value }) {
-  const res = await fetch('/api/annotations', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path, key, value }),
-  })
-  if (res.status === 404) {
-    throw new Error('Project not found')
+  const res = await client.setAnnotation({ path, key, value })
+  return {
+    root: res.root,
+    fields: (res.fields ?? []).map((f) => ({
+      id: f.id,
+      label: f.label,
+      kind: f.kind,
+      sortable: f.sortable,
+      filterable: f.filterable,
+    })),
+    project: projectFromProto(res.project),
+    known_tags: res.knownTags ?? [],
+    tag_colors: { ...(res.tagColors ?? {}) },
   }
-  if (!res.ok) {
-    let message = `Failed to save annotation (${res.status})`
-    try {
-      const text = (await res.text()).trim()
-      if (text) message = text
-    } catch {
-      // keep status message
-    }
-    throw new Error(message)
-  }
-  return res.json()
 }
 
-/** Prefer API field catalogue when present; always keep builtin helper fields. */
 export function resolveFields(apiFields) {
   const fromAPI = Array.isArray(apiFields) ? apiFields : []
   if (fromAPI.length === 0) {
@@ -193,6 +266,8 @@ export function filterTypeForKind(kind) {
   switch (kind) {
     case 'int':
       return 'number'
+    case 'bool':
+      return 'boolean'
     case 'multi':
       return 'select'
     default:
@@ -209,6 +284,9 @@ export function formatCellValue(kind, value) {
   }
   if (kind === 'time') {
     return formatRelativeTime(value)
+  }
+  if (kind === 'bool') {
+    return value ? 'Yes' : 'No'
   }
   return String(value)
 }

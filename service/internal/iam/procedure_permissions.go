@@ -1,0 +1,49 @@
+package iam
+
+import (
+	"github.com/jamesread/armature-iam/rbac"
+	"github.com/jamesread/RepoManager/service/gen/repomanager/v1/repomanagerv1connect"
+)
+
+// RequiredPermission maps Connect procedures to RBAC permission names.
+func RequiredPermission(procedureName string) string {
+	switch procedureName {
+	case repomanagerv1connect.RepoManagerServiceResetUserPasswordProcedure:
+		return rbac.PermissionUsersResetPassword
+	case repomanagerv1connect.RepoManagerServiceListUsersProcedure,
+		repomanagerv1connect.RepoManagerServiceGetUserProcedure:
+		return rbac.PermissionUsersView
+	case repomanagerv1connect.RepoManagerServiceCreateUserProcedure:
+		return rbac.PermissionUsersCreate
+	case repomanagerv1connect.RepoManagerServiceDeleteUserProcedure:
+		return rbac.PermissionUsersDelete
+	case repomanagerv1connect.RepoManagerServiceChangePasswordProcedure:
+		return rbac.PermissionAppAccess
+	case repomanagerv1connect.RepoManagerServiceListRbacPermissionsProcedure,
+		repomanagerv1connect.RepoManagerServiceListRbacRolesProcedure,
+		repomanagerv1connect.RepoManagerServiceGetUserRbacRolesProcedure,
+		repomanagerv1connect.RepoManagerServiceGetUserGroupRbacRolesProcedure,
+		repomanagerv1connect.RepoManagerServiceGetRbacRoleUsersProcedure,
+		repomanagerv1connect.RepoManagerServiceGetRbacRoleGroupsProcedure,
+		repomanagerv1connect.RepoManagerServiceGetMyPermissionsAuditProcedure:
+		return rbac.PermissionRbacView
+	case repomanagerv1connect.RepoManagerServiceCreateRbacRoleProcedure,
+		repomanagerv1connect.RepoManagerServiceUpdateRbacRoleProcedure,
+		repomanagerv1connect.RepoManagerServiceDeleteRbacRoleProcedure,
+		repomanagerv1connect.RepoManagerServiceSetUserGroupRbacRolesProcedure:
+		return rbac.PermissionRbacManage
+	case repomanagerv1connect.RepoManagerServiceListUserGroupsProcedure,
+		repomanagerv1connect.RepoManagerServiceGetUserGroupMembersProcedure:
+		return rbac.PermissionUserGroupsView
+	case repomanagerv1connect.RepoManagerServiceCreateUserGroupProcedure,
+		repomanagerv1connect.RepoManagerServiceDeleteUserGroupProcedure,
+		repomanagerv1connect.RepoManagerServiceSetUserGroupMembersProcedure:
+		return rbac.PermissionUserGroupsManage
+	case repomanagerv1connect.RepoManagerServiceListCvarsProcedure,
+		repomanagerv1connect.RepoManagerServiceUpdateCvarProcedure:
+		return rbac.PermissionSystemSettings
+	case repomanagerv1connect.RepoManagerServiceGetDatabaseStatusProcedure:
+		return rbac.PermissionSystemLogs
+	}
+	return rbac.PermissionAppAccess
+}

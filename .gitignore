@@ -2,8 +2,13 @@ plist
 plist-wui
 frontend/node_modules/
 frontend/dist/
+frontend/gen/
+service/gen/
 tmp/
 service/tmp/
+*.db
+*.db-shm
+*.db-wal
 .vite/
 *.exe
 *.test

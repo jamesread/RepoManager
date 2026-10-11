@@ -7,6 +7,12 @@ import (
 	"strings"
 )
 
+// RepoName is the display name for a repository: the basename of the directory
+// that contains .git (not the path relative to the scan root).
+func RepoName(projectDir string) string {
+	return filepath.Base(filepath.Clean(projectDir))
+}
+
 // FormatPath renders a project path for display using the user's layout
 // preferences. scanRoot is the directory being scanned (plist's cwd argument).
 func FormatPath(absPath, scanRoot string, relative, tilde bool) string {

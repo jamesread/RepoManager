@@ -1,0 +1,6 @@
+site_title: RepoManager
+listen_port: "8080"
+database_url: file:tmp/repomanager.db?_foreign_keys=on
+
+auth:
+  baseDir: tmp/httpauthshim

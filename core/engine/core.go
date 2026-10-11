@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 
@@ -296,6 +297,7 @@ func (c *Core) startScan() <-chan struct{} {
 			}
 			c.upsert(p)
 			c.emit(ProjectFound{Project: p.clone()})
+			slog.Info("project found, enriching helpers", "path", f.Path, "rel", f.Rel)
 			c.helpers.Enrich(f.Path)
 		})
 		c.mu.Lock()
@@ -350,12 +352,13 @@ func (c *Core) loadCachedProjects() {
 		}
 		p := Project{
 			Path:        entry.Path,
-			Rel:         entry.Rel,
+			Rel:         project.RepoName(entry.Path),
 			Tags:        tags,
 			Meta:        map[string]any{},
 			Annotations: c.store.AnnotationsFor(entry.Path),
 		}
 		c.upsert(p)
+		slog.Info("cached project loaded, enriching helpers", "path", entry.Path, "rel", p.Rel)
 		c.helpers.Enrich(entry.Path)
 	}
 	if len(valid) != len(cached) {
@@ -378,7 +381,26 @@ func (c *Core) drainHelpers() {
 			}
 			switch m := msg.(type) {
 			case helpers.MetaMsg:
-				if m.Err == nil && len(m.Meta) > 0 {
+				switch {
+				case m.Err != nil:
+					slog.Warn("project helper result ignored",
+						"path", m.Path,
+						"helper", m.Helper,
+						"reason", "error",
+						"err", m.Err,
+					)
+				case len(m.Meta) == 0:
+					slog.Info("project helper result ignored",
+						"path", m.Path,
+						"helper", m.Helper,
+						"reason", "empty metadata",
+					)
+				default:
+					slog.Debug("project helper result applied",
+						"path", m.Path,
+						"helper", m.Helper,
+						"meta_keys", len(m.Meta),
+					)
 					c.applyMeta(m.Path, m.Helper, m.Meta)
 				}
 			case helpers.GitHubPendingMsg:
@@ -474,8 +496,11 @@ func (c *Core) projectByPath(path string) (Project, bool) {
 func (c *Core) refresh(paths []string) error {
 	icons := helpers.NewIconHelper(c.store.CacheDir())
 	for _, path := range paths {
+		slog.Info("refreshing project helpers", "path", path)
 		if meta, err := icons.CollectForced(c.ctx, path); err == nil && meta != nil {
 			c.applyMeta(path, icons.Name(), meta)
+		} else if err != nil {
+			slog.Warn("icon helper refresh failed", "path", path, "err", err)
 		}
 		c.helpers.Refresh(path)
 	}

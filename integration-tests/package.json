@@ -1,0 +1,10 @@
+{
+  "name": "repomanager-integration-tests",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "mocha": "^11.7.5",
+    "selenium-webdriver": "^4.40.0",
+    "wait-on": "^9.0.4"
+  }
+}

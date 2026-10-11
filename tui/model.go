@@ -618,12 +618,34 @@ func (m *model) refreshProjectAnnotations(path string) {
 	}
 }
 
+func (m *model) listSuccessorPath(path string) string {
+	items := m.list.Items()
+	for i, it := range items {
+		p, ok := it.(projectItem)
+		if !ok || p.path != path {
+			continue
+		}
+		if i+1 >= len(items) {
+			return ""
+		}
+		if next, ok := items[i+1].(projectItem); ok {
+			return next.path
+		}
+		return ""
+	}
+	return ""
+}
+
 func (m *model) handleAnnotationSet(msg annotationSetMsg) tea.Cmd {
 	if msg.err != nil {
 		return m.list.NewStatusMessage(fmt.Sprintf("annotation error: %v", msg.err))
 	}
 
-	prevIdx := m.list.Index()
+	detailsSuccessor := ""
+	if m.details.open {
+		detailsSuccessor = m.listSuccessorPath(m.details.path)
+	}
+
 	removed := 0
 	for _, path := range msg.paths {
 		m.refreshProjectAnnotations(path)
@@ -633,26 +655,14 @@ func (m *model) handleAnnotationSet(msg annotationSetMsg) tea.Cmd {
 	}
 	m.refreshTitle()
 
-	if m.details.open {
-		for _, path := range msg.paths {
-			if m.details.path == path && !m.projectVisibleInView(path) {
-				items := m.list.VisibleItems()
-				if len(items) == 0 {
-					m.details.open = false
-				} else {
-					next := prevIdx
-					if next >= len(items) {
-						next = len(items) - 1
-					}
-					if next < 0 {
-						next = 0
-					}
-					if p, ok := items[next].(projectItem); ok {
-						m.details.path = p.path
-					}
-				}
-				break
-			}
+	if m.details.open && !m.projectVisibleInView(m.details.path) {
+		if detailsSuccessor != "" && m.projectVisibleInView(detailsSuccessor) {
+			m.details.path = detailsSuccessor
+			m.reselect(detailsSuccessor)
+		} else if len(m.list.VisibleItems()) == 0 {
+			m.details.open = false
+		} else if item, ok := m.list.SelectedItem().(projectItem); ok {
+			m.details.path = item.path
 		}
 	}
 

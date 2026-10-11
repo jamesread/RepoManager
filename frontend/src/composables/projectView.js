@@ -17,7 +17,7 @@ export function rememberProjectView(view) {
   }
 }
 
-function sanitizeIconDraft(draft) {
+export function sanitizeIconDraft(draft) {
   if (!draft || typeof draft !== 'object') return null
   if (draft.type === 'select') {
     const values = Array.isArray(draft.values) ? draft.values.map((value) => String(value)) : []
@@ -29,6 +29,10 @@ function sanitizeIconDraft(draft) {
       operator: typeof draft.operator === 'string' ? draft.operator : 'eq',
       value: draft.value == null ? '' : String(draft.value),
     }
+  }
+  if (draft.type === 'boolean') {
+    const value = draft.value
+    return { type: 'boolean', value: value === true || value === false ? value : null }
   }
   if (draft.type === 'text') {
     return {
