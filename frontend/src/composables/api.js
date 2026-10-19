@@ -131,8 +131,16 @@ export async function refreshProject(path) {
 }
 
 export async function refreshProjects(paths) {
-  const res = await client.refreshProjects({ paths })
-  return listBody(res)
+  try {
+    const res = await client.refreshProjects({ paths })
+    return listBody(res)
+  } catch (e) {
+    // Already gone from the index (e.g. deleted on disk) — caller reloads.
+    if (isProjectNotFoundError(e)) {
+      return { ok: true, removed: true }
+    }
+    throw e
+  }
 }
 
 export async function deleteProject(path) {
@@ -345,4 +353,19 @@ export function projectFieldValue(project, fieldID) {
   }
   const v = project.meta?.[fieldID]
   return v == null || v === '' ? null : v
+}
+
+/** Browser URL for a project's GitHub remote, or '' when unknown. */
+export function githubProjectURL(project) {
+  const meta = project?.meta || {}
+  const owner = meta['github.owner']
+  const repo = meta['github.repo']
+  if (owner && repo) {
+    return `https://github.com/${owner}/${repo}`
+  }
+  const full = meta['github.full_name']
+  if (full) {
+    return `https://github.com/${full}`
+  }
+  return ''
 }

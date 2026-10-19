@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
+import { CopyIcon, GithubIcon, RefreshIcon } from '@hugeicons/core-free-icons'
 import Section from 'picocrank/vue/components/Section.vue'
 import Table from 'picocrank/vue/components/Table.vue'
 import ProjectIcon from '../components/ProjectIcon.vue'
@@ -12,6 +13,7 @@ import {
   fetchProjects,
   filterTypeForKind,
   formatCellValue,
+  githubProjectURL,
   projectFieldValue,
   projectIconURL,
   refreshProject,
@@ -327,25 +329,98 @@ async function copySelectedTableToClipboard() {
   }
 }
 
-async function onRefreshSelected() {
-  const paths = [...selectedKeys.value]
-  if (!paths.length || refreshingSelection.value) return
+async function onRefreshPaths(paths) {
+  const targets = [...paths].filter(Boolean)
+  if (!targets.length) return
+  if (targets.length === 1) {
+    await onRefreshProject(targets[0])
+    return
+  }
+  if (refreshingSelection.value) return
   refreshingSelection.value = true
   refreshing.value = {
     ...refreshing.value,
-    ...Object.fromEntries(paths.map((path) => [path, true])),
+    ...Object.fromEntries(targets.map((path) => [path, true])),
   }
   try {
-    await refreshProjects(paths)
+    await refreshProjects(targets)
     await load()
   } catch (e) {
     error.value = e.message || String(e)
   } finally {
     refreshingSelection.value = false
     const next = { ...refreshing.value }
-    for (const path of paths) delete next[path]
+    for (const path of targets) delete next[path]
     refreshing.value = next
   }
+}
+
+async function onRefreshSelected() {
+  await onRefreshPaths(selectedKeys.value)
+}
+
+async function copyProjectPaths(paths) {
+  const text = [...paths].filter(Boolean).join('\n')
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch (e) {
+    error.value = e.message || String(e)
+  }
+}
+
+function projectByPath(path) {
+  return projects.value.find((project) => project.path === path) || null
+}
+
+function githubURLsForPaths(paths) {
+  return [...paths]
+    .map((path) => githubProjectURL(projectByPath(path)))
+    .filter(Boolean)
+}
+
+function openGitHubForPaths(paths) {
+  for (const url of githubURLsForPaths(paths)) {
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+}
+
+function projectCardContextMenu(ctx) {
+  const paths = ctx.keys?.length ? ctx.keys : [ctx.key]
+  const busy = refreshingSelection.value || paths.some((path) => isRefreshing(path))
+  const githubCount = githubURLsForPaths(paths).length
+  const items = [
+    {
+      id: 'refresh',
+      label: busy ? 'Refreshing…' : 'Refresh',
+      icon: RefreshIcon,
+      disabled: busy,
+      action: ({ keys }) => {
+        onRefreshPaths(keys)
+      },
+    },
+    {
+      id: 'copy-path',
+      label: paths.length > 1 ? 'Copy paths' : 'Copy path',
+      icon: CopyIcon,
+      showCount: false,
+      action: ({ keys }) => {
+        copyProjectPaths(keys)
+      },
+    },
+  ]
+  if (githubCount > 0) {
+    items.push({
+      id: 'open-github',
+      label: githubCount > 1 ? `Open GitHub (${githubCount})` : 'Open GitHub',
+      icon: GithubIcon,
+      showCount: false,
+      action: ({ keys }) => {
+        openGitHubForPaths(keys)
+      },
+    })
+  }
+  return items
 }
 
 async function load() {
@@ -734,6 +809,7 @@ onUnmounted(() => {
         :selectable="multiSelect"
         :tag-colors="tagColors"
         :tag-order="knownTags"
+        :row-context-menu="projectCardContextMenu"
         @update:selected-keys="selectedKeys = $event"
         @visible-paths-changed="onIconVisiblePathsChanged"
         @layout-summary-changed="iconsLayoutSummary = $event"

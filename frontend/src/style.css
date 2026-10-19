@@ -5,6 +5,15 @@ main {
   width: 100%;
 }
 
+html.compact-mode main {
+  padding: 0;
+}
+
+html.compact-mode section {
+  border-radius: 0;
+  margin: 0;
+}
+
 /* Checkbox is column 1; project names stay wide in column 2. */
 .table-scroll.sticky-cols-2 {
   --sticky-col-1-width: 2.5rem;
@@ -465,7 +474,7 @@ section.projects-icons-view .section-header {
   grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
   gap: 0.75rem;
   margin: 0;
-  padding: 1rem;
+  padding: 0;
   list-style: none;
 }
 
@@ -522,6 +531,22 @@ button.multi-select-toggle[aria-pressed='true'] {
 
 .project-tile-selected:hover,
 .project-tile-selected:focus-within {
+  box-shadow: inset 0 0 0 2px var(--text-color), 0 4px 8px var(--nav-grid-hover-shadow);
+}
+
+.project-tile-context-menu-active,
+.project-tile-context-menu-active:hover,
+.project-tile-context-menu-active:focus-visible {
+  border-color: var(--nav-grid-accent-fg);
+  background: var(--nav-grid-hover-bg);
+  color: var(--text-color);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px var(--nav-grid-hover-shadow);
+}
+
+.project-tile-selected.project-tile-context-menu-active,
+.project-tile-selected.project-tile-context-menu-active:hover,
+.project-tile-selected.project-tile-context-menu-active:focus-within {
   box-shadow: inset 0 0 0 2px var(--text-color), 0 4px 8px var(--nav-grid-hover-shadow);
 }
 

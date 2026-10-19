@@ -3,10 +3,12 @@ package engine
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/jamesread/RepoManager/core/helpers"
 	"github.com/jamesread/RepoManager/core/store"
 )
 
@@ -159,6 +161,108 @@ func TestSetRootRejectsMissing(t *testing.T) {
 	err := eng.Send(context.Background(), SetRootRequest{Root: filepath.Join(t.TempDir(), "missing")})
 	if err == nil {
 		t.Fatal("expected error for missing root")
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %v (%s)", args, err, out)
+	}
+}
+
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "git", "init", "-b", "main")
+	runGit(t, dir, "git", "config", "user.email", "test@example.com")
+	runGit(t, dir, "git", "config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "git", "add", "README")
+	runGit(t, dir, "git", "commit", "-m", "init")
+}
+
+func hasTag(tags []string, want string) bool {
+	for _, tag := range tags {
+		if tag == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRefreshRemovesMissingProject(t *testing.T) {
+	st := newTestStore(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "gone")
+	initGitRepo(t, path)
+	st.NoteGitProject(path)
+	_ = st.SetCacheRoot(root, []store.CachedProject{{Path: path, Rel: "gone"}})
+
+	eng := New(st, root)
+	defer eng.Close()
+	_ = eng.Subscribe()
+
+	if len(eng.Snapshot()) != 1 {
+		t.Fatalf("snapshot=%#v", eng.Snapshot())
+	}
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := eng.Send(context.Background(), RefreshRequest{Paths: []string{path}}); err != nil {
+		t.Fatal(err)
+	}
+	if snap := eng.Snapshot(); len(snap) != 0 {
+		t.Fatalf("expected empty snapshot after refresh, got %#v", snap)
+	}
+	if tags := st.TagsFor(path); len(tags) != 0 {
+		t.Fatalf("expected store metadata cleared, tags=%#v", tags)
+	}
+}
+
+func TestRefreshClearsStaleGitStatusTags(t *testing.T) {
+	st := newTestStore(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "repo")
+	initGitRepo(t, path)
+
+	// Simulate a prior dirty check that left a stale "changes" tag.
+	if _, err := st.AddTag(path, helpers.GitTagChanges); err != nil {
+		t.Fatal(err)
+	}
+	st.NoteGitProject(path)
+	_ = st.SetCacheRoot(root, []store.CachedProject{{Path: path, Rel: "repo"}})
+
+	eng := New(st, root)
+	defer eng.Close()
+	_ = eng.Subscribe()
+
+	snap := eng.Snapshot()
+	if len(snap) != 1 || !hasTag(snap[0].Tags, helpers.GitTagChanges) {
+		t.Fatalf("pre-refresh snapshot=%#v", snap)
+	}
+
+	if err := eng.Send(context.Background(), RefreshRequest{Paths: []string{path}}); err != nil {
+		t.Fatal(err)
+	}
+
+	snap = eng.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("snapshot=%#v", snap)
+	}
+	if hasTag(snap[0].Tags, helpers.GitTagChanges) {
+		t.Fatalf("changes tag still present after clean refresh: %#v", snap[0].Tags)
+	}
+	if hasTag(st.TagsFor(path), helpers.GitTagChanges) {
+		t.Fatalf("changes tag still in store: %#v", st.TagsFor(path))
 	}
 }
 

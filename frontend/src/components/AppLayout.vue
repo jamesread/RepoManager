@@ -1,10 +1,11 @@
 <script setup>
 import Header from 'picocrank/vue/components/Header.vue'
 import { HugeiconsIcon } from '@hugeicons/vue'
-import { LayoutGridIcon, RefreshIcon, Settings01Icon, TableIcon } from '@hugeicons/core-free-icons'
+import { BorderNone01Icon, LayoutGridIcon, RefreshIcon, Settings01Icon, TableIcon } from '@hugeicons/core-free-icons'
 import { computed, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { refreshRoot } from '../composables/api'
+import { isCompactMode, toggleCompactMode } from '../composables/compactMode'
 import { canAccessControlPanel } from '../composables/rbacAccess.js'
 import { useInit } from '../composables/useInit.js'
 
@@ -12,6 +13,11 @@ const route = useRoute()
 const router = useRouter()
 const init = useInit()
 const refreshing = ref(false)
+const compact = ref(isCompactMode())
+
+function onToggleCompact() {
+  compact.value = toggleCompactMode()
+}
 
 const username = computed(() => init.user?.username ?? '')
 const themeToggleEnabled = computed(
@@ -83,6 +89,16 @@ const navigation = computed(() => ({
       >
         <HugeiconsIcon :icon="Settings01Icon" width="1em" height="1em" />
       </RouterLink>
+      <button
+        type="button"
+        class="neutral"
+        title="Compact mode"
+        aria-label="Compact mode"
+        :aria-pressed="compact"
+        @click="onToggleCompact"
+      >
+        <HugeiconsIcon :icon="BorderNone01Icon" width="1em" height="1em" />
+      </button>
       <button
         type="button"
         class="neutral"

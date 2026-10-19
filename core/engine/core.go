@@ -412,9 +412,11 @@ func (c *Core) drainHelpers() {
 
 func (c *Core) applyMeta(path, helper string, meta map[string]any) {
 	tags, rest := helpers.SplitTags(meta)
+	syncedGitStatus := false
 	if helper == "git" {
 		if _, ok := meta[helpers.MetaKeyTags]; ok {
 			c.syncGitStatusTags(path, tags)
+			syncedGitStatus = true
 		}
 	} else {
 		for _, tag := range tags {
@@ -434,7 +436,10 @@ func (c *Core) applyMeta(path, helper string, meta map[string]any) {
 		return
 	}
 	c.all[idx].Meta = mergeMeta(c.all[idx].Meta, rest)
-	if len(tags) > 0 {
+	if syncedGitStatus {
+		// Replace from store so cleared git status tags (e.g. "changes") drop.
+		c.all[idx].Tags = c.store.TagsFor(path)
+	} else if len(tags) > 0 {
 		c.all[idx].Tags = mergeTags(c.all[idx].Tags, c.store.TagsFor(path))
 	}
 	updated := c.all[idx].clone()
@@ -495,16 +500,53 @@ func (c *Core) projectByPath(path string) (Project, bool) {
 
 func (c *Core) refresh(paths []string) error {
 	icons := helpers.NewIconHelper(c.store.CacheDir())
+	git := helpers.GitHelper{}
 	for _, path := range paths {
 		slog.Info("refreshing project helpers", "path", path)
+		if !project.IsIndexed(path) {
+			c.dropMissingProject(path)
+			continue
+		}
 		if meta, err := icons.CollectForced(c.ctx, path); err == nil && meta != nil {
 			c.applyMeta(path, icons.Name(), meta)
 		} else if err != nil {
 			slog.Warn("icon helper refresh failed", "path", path, "err", err)
 		}
+		// Sync git status tags before returning so API clients that reload
+		// immediately see an up-to-date "changes"/"ahead"/"behind" set.
+		if meta, err := git.Collect(c.ctx, path); err == nil && meta != nil {
+			c.applyMeta(path, git.Name(), meta)
+		}
 		c.helpers.Refresh(path)
 	}
 	return nil
+}
+
+// dropMissingProject removes a project that no longer exists on disk.
+func (c *Core) dropMissingProject(path string) {
+	c.mu.Lock()
+	idx := -1
+	for i := range c.all {
+		if c.all[i].Path == path {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		c.mu.Unlock()
+		return
+	}
+	_ = c.store.RemoveProject(path)
+	c.all = append(c.all[:idx], c.all[idx+1:]...)
+	c.found = len(c.all)
+	root := c.root
+	cached := make([]store.CachedProject, 0, len(c.all))
+	for _, p := range c.all {
+		cached = append(cached, store.CachedProject{Path: p.Path, Rel: p.Rel})
+	}
+	c.mu.Unlock()
+	_ = c.store.SetCacheRoot(root, cached)
+	c.emit(ProjectRemoved{Path: path})
 }
 
 // DeleteLocalProject removes the project's directory from the local disk and

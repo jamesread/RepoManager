@@ -10,6 +10,7 @@ import {
   deleteProject,
   fetchProject,
   formatCellValue,
+  githubProjectURL,
   isProjectNotFoundError,
   projectFieldValue,
   projectIconURL,
@@ -115,19 +116,7 @@ function packageURLHref(value) {
   return `https://${text}`
 }
 
-const githubURL = computed(() => {
-  const meta = project.value?.meta || {}
-  const owner = meta['github.owner']
-  const repo = meta['github.repo']
-  if (owner && repo) {
-    return `https://github.com/${owner}/${repo}`
-  }
-  const full = meta['github.full_name']
-  if (full) {
-    return `https://github.com/${full}`
-  }
-  return ''
-})
+const githubURL = computed(() => githubProjectURL(project.value))
 
 function displayValue(row) {
   return formatCellValue(row.kind, row.value)

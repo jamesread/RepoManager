@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import CheckGroup from 'picocrank/vue/components/CheckGroup.vue'
+import TableRowContextMenu from 'picocrank/vue/components/TableRowContextMenu.vue'
 import { sortRows } from 'picocrank/vue/composables/tableFilters.js'
 import ProjectIcon from './ProjectIcon.vue'
 import ProjectTag from './ProjectTag.vue'
@@ -67,9 +68,19 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
+  rowContextMenu: {
+    type: [Array, Function],
+    default: null,
+  },
 })
 
-const emit = defineEmits(['update:selectedKeys', 'visible-paths-changed', 'layout-summary-changed'])
+const emit = defineEmits([
+  'update:selectedKeys',
+  'visible-paths-changed',
+  'layout-summary-changed',
+  'row-context-menu',
+  'row-context-menu-action',
+])
 
 const savedIconView = loadIconViewState()
 const sortBy = ref(savedIconView?.sortBy || 'name')
@@ -582,6 +593,10 @@ function toggleSelected(id) {
   emit('update:selectedKeys', [...next])
 }
 
+function setSelectedKeys(keys) {
+  emit('update:selectedKeys', keys)
+}
+
 function tileBindings(row) {
   if (props.selectable) return {}
   return {
@@ -596,6 +611,113 @@ function onTileClick(event, id) {
   toggleSelected(id)
 }
 
+const hasRowContextMenu = computed(() => {
+  if (typeof props.rowContextMenu === 'function') return true
+  return Array.isArray(props.rowContextMenu) && props.rowContextMenu.length > 0
+})
+
+const rowContextMenuOpen = ref(false)
+const rowContextMenuX = ref(0)
+const rowContextMenuY = ref(0)
+const rowContextMenuItems = ref([])
+const rowContextMenuTargetKeys = ref([])
+const rowContextMenuAnchor = ref(null)
+
+const rowContextMenuTargetKeySet = computed(() => new Set(rowContextMenuTargetKeys.value))
+
+function isRowContextMenuTarget(id) {
+  return rowContextMenuOpen.value && rowContextMenuTargetKeySet.value.has(id)
+}
+
+function normalizeContextMenuItems(rawItems) {
+  if (!Array.isArray(rawItems)) return []
+  return rawItems.filter((item) => item && (item.divider || item.label || item.id))
+}
+
+function closeRowContextMenu() {
+  rowContextMenuOpen.value = false
+  rowContextMenuItems.value = []
+  rowContextMenuTargetKeys.value = []
+  rowContextMenuAnchor.value = null
+}
+
+function resolveTargetRows(keys) {
+  const lookup = new Map(props.rows.map((row) => [row.id, row]))
+  return keys.map((key) => lookup.get(key)).filter((row) => row != null)
+}
+
+function shouldIgnoreContextTarget(event) {
+  const ignore = event.target.closest('a, button, input, select, textarea, [data-row-click-ignore]')
+  return Boolean(ignore && ignore !== event.currentTarget)
+}
+
+function onTileContextMenu(row, event) {
+  if (!hasRowContextMenu.value) return
+  if (shouldIgnoreContextTarget(event)) return
+
+  event.preventDefault()
+  event.stopPropagation()
+
+  const key = row.id
+  let targetKeys
+  if (props.selectable && selectedSet.value.has(key) && props.selectedKeys.length > 0) {
+    targetKeys = [...props.selectedKeys]
+  } else {
+    targetKeys = [key]
+    if (props.selectable) setSelectedKeys([key])
+  }
+
+  const rows = resolveTargetRows(targetKeys)
+  const ctx = {
+    row,
+    key,
+    rows,
+    keys: targetKeys,
+    selectedKeys: [...props.selectedKeys],
+  }
+
+  const rawItems = typeof props.rowContextMenu === 'function'
+    ? props.rowContextMenu(ctx)
+    : props.rowContextMenu
+  const items = normalizeContextMenuItems(rawItems)
+  if (items.length === 0) {
+    closeRowContextMenu()
+    return
+  }
+
+  rowContextMenuAnchor.value = ctx
+  rowContextMenuTargetKeys.value = targetKeys
+  rowContextMenuItems.value = items
+  rowContextMenuX.value = event.clientX
+  rowContextMenuY.value = event.clientY
+  rowContextMenuOpen.value = true
+
+  emit('row-context-menu', {
+    ...ctx,
+    event,
+  })
+}
+
+function onRowContextMenuSelect(item) {
+  const anchor = rowContextMenuAnchor.value
+  const keys = [...rowContextMenuTargetKeys.value]
+  const rows = resolveTargetRows(keys)
+  const payload = {
+    item,
+    row: anchor?.row,
+    key: anchor?.key,
+    rows,
+    keys,
+    selectedKeys: [...props.selectedKeys],
+  }
+
+  if (typeof item.action === 'function') {
+    item.action(payload)
+  }
+
+  emit('row-context-menu-action', payload)
+  closeRowContextMenu()
+}
 </script>
 
 <template>
@@ -631,9 +753,11 @@ function onTileClick(event, id) {
               :class="{
                 'project-tile-selectable': selectable,
                 'project-tile-selected': selectable && selectedSet.has(row.id),
+                'project-tile-context-menu-active': isRowContextMenuTarget(row.id),
               }"
               v-bind="tileBindings(row)"
               @click="onTileClick($event, row.id)"
+              @contextmenu="onTileContextMenu(row, $event)"
             >
               <label v-if="selectable" class="project-tile-check">
                 <input
@@ -663,6 +787,15 @@ function onTileClick(event, id) {
         </ul>
       </div>
     </template>
+
+    <TableRowContextMenu
+      v-model:open="rowContextMenuOpen"
+      :items="rowContextMenuItems"
+      :client-x="rowContextMenuX"
+      :client-y="rowContextMenuY"
+      :target-count="rowContextMenuTargetKeys.length"
+      @select="onRowContextMenuSelect"
+    />
   </div>
 
   <dialog
